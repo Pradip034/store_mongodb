@@ -321,7 +321,13 @@ export async function createApp(env = process.env) {
   server.on('close', () => { client.close().catch(() => {}); });
   return server;
 }
+//if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+ // const server = await createApp();
+ // server.listen(Number(process.env.PORT || 3000), process.env.HOST || '127.0.0.1', () => console.log(`Store ready: ${process.env.APP_ORIGIN || 'http://localhost:3000'} — Admin: /admin`));
+//}
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const server = await createApp();
-  server.listen(Number(process.env.PORT || 3000), process.env.HOST || '127.0.0.1', () => console.log(`Store ready: ${process.env.APP_ORIGIN || 'http://localhost:3000'} — Admin: /admin`));
+  const port = parseInt(process.env.PORT, 10) || 10000;
+  const host = process.env.HOST || '0.0.0.0';
+  server.listen(port, host, () => console.log(`Store ready: ${process.env.APP_ORIGIN || process.env.RENDER_EXTERNAL_URL || 'http://localhost:10000'} — Admin: /admin`));
 }
