@@ -1,0 +1,9 @@
+.env
+data
+uploads
+node_modules
+.git
+test
+*.log
+.pnpm-store
+.mongodb-binaries

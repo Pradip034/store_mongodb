@@ -1,0 +1,22 @@
+{
+  "name": "health-partner-store-mongodb",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Responsive Node.js organic grocery storefront with WhatsApp, Razorpay and admin uploads",
+  "engines": {
+    "node": ">=24.0.0"
+  },
+  "scripts": {
+    "setup": "node setup.mjs",
+    "start": "node --env-file-if-exists=.env server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "test:integration": "node --env-file-if-exists=.env --test test/store.test.mjs"
+  },
+  "dependencies": {
+    "mongodb": "^6.21.0"
+  },
+  "devDependencies": {
+    "mongodb-memory-server-core": "^11.3.0"
+  }
+}
