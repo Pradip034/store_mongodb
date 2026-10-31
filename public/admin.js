@@ -7,9 +7,10 @@ let currentImage = '', products = [], previewUrl = '';
 async function api(url, method = 'GET', data) {
   const response = await fetch(url, { method, ...(data ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : {}) });
   const result = await response.json();
-  if (response.status === 401) { $('login-section').hidden = false; $('dashboard').hidden = true; }
+  if (response.status === 401) { $('login-section').hidden = false; $('dashboard').hidden = true; signedIn(false); }
   if (!response.ok) throw new Error(result.error || 'Request failed.'); return result;
 }
+function signedIn(on) { $('admin-links').hidden = !on; $('logout').hidden = !on; }
 function status(text, error = false) { $('admin-status').textContent = text; $('admin-status').classList.toggle('error', error); }
 function reset() { currentVideo = ''; if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl); videoPreviewUrl = ''; $('video-preview').pause(); $('video-preview').removeAttribute('src'); $('video-preview').hidden = true; form.reset(); form.elements.id.value = ''; currentImage = ''; if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = ''; $('image-preview').hidden = true; $('editor-title').textContent = 'Add a product'; }
 async function loadProducts() {
@@ -36,13 +37,55 @@ function whatsappNumber(phone) {
   return digits.length >= 11 && digits.length <= 15 ? digits : '';
 }
 function invoiceMessage(o) {
-  return [`Hello ${o.customer.name}, thank you for shopping with Let Us Be Your Health Partner!`, 'Your order has been delivered. Here is your invoice.', '',
-    `*Invoice ${o.number}*`, 'Issued by: Aranya Global, Kolkata - 700079', `Date: ${new Date(o.created).toLocaleDateString('en-IN')}`, `Order: ${o.id}`, '',
+  return [`Hello ${o.customer.name}, thank you for shopping with Let Us Be Your Health Partner!`, 'Your order has been delivered. Your invoice PDF is attached.', '',
+    '*Invoice Details*', ...(o.number ? [`Invoice no.: ${o.number}`] : []), 'Issued by: Aranya Global, Kolkata - 700079', `Date: ${new Date(o.created).toLocaleDateString('en-IN')}`, `Order: ${o.id}`, '',
     ...o.lines.map(l => `${l.name} (${l.unit}) × ${l.quantity} = ${money(l.total)}`), '',
     `Subtotal: ${money(o.subtotal)}`, `Delivery: ${o.delivery ? money(o.delivery) : 'Free'}`, `*Total: ${money(o.total)}*`, `Payment: ${paymentNames[o.state] || o.state.replaceAll('_', ' ')}`, '',
     `Delivered to: ${o.customer.address}`, '', 'We hope to serve you again soon!'].join('\n');
 }
-async function loadOrders() { orders = await api('/api/admin/orders'); renderOrders(); }
+const invoiceUrl = o => `/api/admin/orders/${encodeURIComponent(o.id)}/invoice.pdf`;
+const invoiceName = o => `Invoice-${o.number || o.id}.pdf`;
+// Phones and some desktop browsers can hand a file to WhatsApp through the system share sheet.
+const canShareFiles = (() => { try { return Boolean(navigator.canShare?.({ files: [new File(['%PDF'], 'test.pdf', { type: 'application/pdf' })] })); } catch { return false; } })();
+const invoiceFiles = new Map();
+async function invoiceFile(o) {
+  if (invoiceFiles.has(o.id)) return invoiceFiles.get(o.id);
+  const response = await fetch(invoiceUrl(o));
+  if (response.status === 401) throw new Error('Please sign in again.');
+  if (!response.ok || !response.headers.get('content-type')?.startsWith('application/pdf')) throw new Error('The invoice PDF could not be created. If this keeps happening, restart the store server so it runs the latest code.');
+  const file = new File([await response.blob()], invoiceName(o), { type: 'application/pdf' });
+  invoiceFiles.set(o.id, file); return file;
+}
+function whatsappButton(o, number) {
+  if (canShareFiles) {
+    const share = el('button', 'sheet-link whatsapp', 'WhatsApp PDF'); share.type = 'button'; share.title = 'Share the invoice PDF — choose WhatsApp, then the customer';
+    share.onclick = async () => {
+      share.disabled = true;
+      try {
+        const cached = invoiceFiles.has(o.id), file = await invoiceFile(o);
+        status(`Choose WhatsApp, then send to ${o.customer.name} (${o.customer.phone}).`);
+        try { await navigator.share({ files: [file], title: invoiceName(o), text: invoiceMessage(o) }); status('Invoice shared.'); }
+        catch (e) {
+          if (e.name === 'AbortError') status('');
+          // Some browsers only allow sharing straight after a tap; the PDF is ready now, so a second tap works.
+          else if (e.name === 'NotAllowedError' && !cached) status('Invoice PDF is ready. Tap "WhatsApp PDF" again to send it.');
+          else throw e;
+        }
+      } catch (e) { status(e.message, true); }
+      finally { share.disabled = false; }
+    };
+    return share;
+  }
+  if (!number) return el('small', '', 'Invalid phone for WhatsApp');
+  // Without file sharing: open the customer's chat and download the PDF so it can be attached there.
+  const send = el('a', 'sheet-link whatsapp', 'WhatsApp + PDF'); send.href = `https://wa.me/${number}?text=${encodeURIComponent(invoiceMessage(o))}`; send.target = '_blank'; send.rel = 'noopener noreferrer'; send.title = 'Open the customer chat and download the invoice PDF to attach';
+  send.onclick = () => { const download = el('a'); download.href = invoiceUrl(o); download.download = invoiceName(o); document.body.append(download); download.click(); download.remove(); status(`Invoice PDF downloaded. Attach ${invoiceName(o)} in the WhatsApp chat with ${o.customer.name}.`); };
+  return send;
+}
+async function loadOrders() {
+  orders = await api('/api/admin/orders'); renderOrders();
+  if (orders.some(o => !o.number)) status('The store server is running an older version, so invoices cannot be created. Restart the server (stop it, then run npm start) and refresh this page.', true);
+}
 function renderOrders() {
   $('orders').replaceChildren();
   for (const tab of document.querySelectorAll('.order-tabs [role=tab]')) {
@@ -77,8 +120,7 @@ function renderOrders() {
     if (completed) { const pdf = el('a', 'sheet-link', 'PDF'); pdf.href = `/api/admin/orders/${encodeURIComponent(o.id)}/invoice.pdf`; pdf.target = '_blank'; pdf.rel = 'noopener'; pdf.title = 'View or download the invoice PDF'; actions.append(pdf); }
     if (completed && o.fulfillment === 'delivered') {
       const number = whatsappNumber(o.customer.phone);
-      if (number) { const send = el('a', 'sheet-link whatsapp', 'WhatsApp'); send.href = `https://wa.me/${number}?text=${encodeURIComponent(invoiceMessage(o))}`; send.target = '_blank'; send.rel = 'noopener noreferrer'; send.title = 'Send the invoice to the customer on WhatsApp'; actions.append(send); }
-      else actions.append(el('small', '', 'Invalid phone for WhatsApp'));
+      actions.append(whatsappButton(o, number));
     }
     if (!actions.children.length) actions.append(el('small', '', '—'));
     row.append(el('td', 'muted', String(index + 1)), when, el('td', 'nowrap mono', o.number || '—'), customer, phone, items, el('td', 'num nowrap', money(o.total)), payment, statusCell, actions);
@@ -97,10 +139,12 @@ for (const tab of document.querySelectorAll('.order-tabs [role=tab]')) {
 const ordersPage = location.pathname === '/admin/orders';
 document.querySelector('.admin-layout').hidden = ordersPage;
 document.querySelector('.admin-orders').hidden = !ordersPage;
+document.querySelector('.admin-top').hidden = ordersPage;
+for (const link of document.querySelectorAll('#admin-links a')) if (link.pathname === location.pathname) link.setAttribute('aria-current', 'page');
 if (ordersPage) { document.querySelector('.admin-top h1').textContent = 'Manage your orders.'; document.title = 'Orders | Store Admin'; }
-async function dashboard() { $('login-section').hidden = true; $('dashboard').hidden = false; if (ordersPage) await loadOrders(); else await loadProducts(); }
+async function dashboard() { $('login-section').hidden = true; $('dashboard').hidden = false; signedIn(true); if (ordersPage) await loadOrders(); else await loadProducts(); }
 $('login-form').onsubmit = async e => { e.preventDefault(); $('login-button').disabled = true; $('login-status').textContent = ''; try { await api('/api/admin/login', 'POST', Object.fromEntries(new FormData(e.target))); e.target.reset(); await dashboard(); } catch (err) { $('login-status').textContent = err.message; } finally { $('login-button').disabled = false; } };
-$('logout').onclick = async () => { try { await api('/api/admin/logout', 'POST'); $('dashboard').hidden = true; $('login-section').hidden = false; $('orders').replaceChildren(); reset(); } catch (e) { status(e.message, true); } };
+$('logout').onclick = async () => { try { await api('/api/admin/logout', 'POST'); $('dashboard').hidden = true; $('login-section').hidden = false; signedIn(false); $('orders').replaceChildren(); reset(); } catch (e) { status(e.message, true); } };
 $('reset-product').onclick = reset;
 $('refresh-orders').onclick = async () => { try { await loadOrders(); status('Orders refreshed.'); } catch (e) { status(e.message, true); } };
 $('image-file').onchange = () => { const file = $('image-file').files[0]; if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = ''; if (!file) { $('image-preview').hidden = !currentImage; if (currentImage) $('image-preview').src = currentImage; return; } if (file.size > 3 * 1024 * 1024 || !['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) { status('Choose a JPG, PNG or WebP image smaller than 3 MB.', true); $('image-file').value = ''; return; } previewUrl = URL.createObjectURL(file); $('image-preview').src = previewUrl; $('image-preview').hidden = false; };

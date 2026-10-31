@@ -161,7 +161,7 @@ $('checkout-form').onsubmit = async event => {
     const items = Object.entries(cart).map(([id, quantity]) => ({ id, quantity }));
     checkoutToken ||= crypto.randomUUID();
     const order = await api('/api/orders', { items, customer, method, token: checkoutToken });
-    if (method === 'whatsapp') { $('whatsapp-link').href = order.whatsappUrl; $('whatsapp-link').hidden = false; status(`Your order summary is ready (${money(order.amount)}). Tap below to send it to the store. It has not been paid online.`); }
+    if (method === 'whatsapp') { $('whatsapp-link').href = order.whatsappUrl; $('whatsapp-link').hidden = false; cart = {}; checkoutToken = null; save(); event.target.reset(); status(`Order placed (${money(order.amount)}). Your basket has been cleared.\nTap below to send the order to the store on WhatsApp. It has not been paid online.`); }
     else {
       keepPending({ id: order.id, token: checkoutToken, items, order, customer: { name: customer.name, phone: customer.phone } });
       await openPayment(order, customer);
