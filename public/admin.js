@@ -24,21 +24,40 @@ async function loadProducts() {
     actions.append(edit, remove); row.append(img, info, actions); $('admin-products').append(row);
   }
 }
-async function loadOrders() {
-  const orders = await api('/api/admin/orders'); $('orders').replaceChildren();
-  if (!orders.length) $('orders').append(el('p', 'empty', 'Your orders will appear here.'));
-  for (const o of orders) { const card = el('article', 'order-card'); card.append(el('h3', '', `${o.customer.name} · ${money(o.total)}`), el('span', `order-status ${o.state}`, o.state.replaceAll('_', ' ')), el('p', 'help', `${new Date(o.created).toLocaleString('en-IN')} · ${o.id}`), el('p', '', o.lines.map(l => `${l.name} (${l.unit}) × ${l.quantity} — ${money(l.total)}`).join('\n')), el('p', '', `Delivery: ${money(o.delivery)}`), el('p', '', `${o.customer.phone}\n${o.customer.address}`)); 
+let orders = [], orderTab = 'in_process';
+const statusNames = { in_process: 'In Process', delivered: 'Delivered', rejected: 'Rejected' };
+async function loadOrders() { orders = await api('/api/admin/orders'); renderOrders(); }
+function renderOrders() {
+  $('orders').replaceChildren();
+  for (const tab of document.querySelectorAll('.order-tabs [role=tab]')) {
+    const selected = tab.dataset.status === orderTab;
+    tab.setAttribute('aria-selected', selected); tab.tabIndex = selected ? 0 : -1;
+    tab.querySelector('span').textContent = orders.filter(o => o.fulfillment === tab.dataset.status).length;
+  }
+  $('orders').setAttribute('aria-labelledby', 'tab-' + orderTab);
+  const shown = orders.filter(o => o.fulfillment === orderTab);
+  if (!shown.length) $('orders').append(el('p', 'empty', `No ${statusNames[orderTab].toLowerCase()} orders.`));
+  for (const o of shown) { const card = el('article', 'order-card'); card.append(el('h3', '', `${o.customer.name} · ${money(o.total)}`), el('span', `order-status ${o.state}`, o.state.replaceAll('_', ' ')), el('p', 'help', `${new Date(o.created).toLocaleString('en-IN')} · ${o.id}`), el('p', '', o.lines.map(l => `${l.name} (${l.unit}) × ${l.quantity} — ${money(l.total)}`).join('\n')), el('p', '', `Delivery: ${money(o.delivery)}`), el('p', '', `${o.customer.phone}\n${o.customer.address}`));
+    const invoiceLink = el('a', 'invoice-admin-link', 'View invoice'); invoiceLink.href = '/invoice/' + encodeURIComponent(o.id); invoiceLink.target = '_blank'; invoiceLink.rel = 'noopener';
+    if (!['creating', 'failed'].includes(o.state)) card.append(invoiceLink);
     const label = el('label', 'fulfillment-control', 'Order status'), select = el('select');
     for (const [value, text] of [['in_process', 'In Process'], ['delivered', 'Delivered'], ['rejected', 'Rejected']]) { const option = el('option', '', text); option.value = value; select.append(option); }
-    select.value = o.fulfillment || 'in_process';
+    select.value = o.fulfillment;
     const saved = el('p', 'help'); saved.setAttribute('role', 'status');
     select.onchange = async () => {
       select.disabled = true; saved.textContent = 'Saving…';
-      try { await api('/api/admin/orders/' + o.id + '/status', 'PUT', { status: select.value }); o.fulfillment = select.value; saved.textContent = 'Saved: ' + select.selectedOptions[0].textContent; }
-      catch (e) { select.value = o.fulfillment || 'in_process'; saved.textContent = e.message; }
-      finally { select.disabled = false; }
+      try { await api('/api/admin/orders/' + o.id + '/status', 'PUT', { status: select.value }); o.fulfillment = select.value; renderOrders(); status(`Order for ${o.customer.name} moved to ${statusNames[o.fulfillment]}.`); }
+      catch (e) { select.value = o.fulfillment; saved.textContent = e.message; select.disabled = false; }
     };
     label.append(select); card.append(label, saved); $('orders').append(card); }
+}
+for (const tab of document.querySelectorAll('.order-tabs [role=tab]')) {
+  tab.onclick = () => { orderTab = tab.dataset.status; status(''); renderOrders(); };
+  tab.onkeydown = e => {
+    const tabs = [...document.querySelectorAll('.order-tabs [role=tab]')], i = tabs.indexOf(tab);
+    const next = { ArrowRight: tabs[(i + 1) % tabs.length], ArrowLeft: tabs[(i + tabs.length - 1) % tabs.length] }[e.key];
+    if (next) { e.preventDefault(); next.click(); next.focus(); }
+  };
 }
 const ordersPage = location.pathname === '/admin/orders';
 document.querySelector('.admin-layout').hidden = ordersPage;

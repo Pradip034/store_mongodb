@@ -5,16 +5,20 @@ let products = [], config, category = 'All', busy = false, checkoutToken = null,
 let cart = {};
 try { const saved = JSON.parse(localStorage.getItem('hp-cart') || '{}'); if (saved && typeof saved === 'object' && !Array.isArray(saved)) for (const [id, qty] of Object.entries(saved)) if (Number.isInteger(qty) && qty > 0 && qty <= 50) cart[id] = qty; } catch {}
 let pending; try { pending = JSON.parse(localStorage.getItem('hp-pending') || 'null'); } catch {}
+let lastInvoice; try { lastInvoice = localStorage.getItem('hp-last-invoice'); } catch {}
 async function api(url, data) { const response = await fetch(url, data ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : {}); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Request failed.'); return result; }
-function save() { try { localStorage.setItem('hp-cart', JSON.stringify(cart)); } catch {} $('cart-count').textContent = Object.values(cart).reduce((s, q) => s + q, 0); }
+function save() {
+  try { localStorage.setItem('hp-cart', JSON.stringify(cart)); } catch {}
+  const count = Object.values(cart).reduce((s, q) => s + q, 0);
+  const subtotal = Object.entries(cart).reduce((s, [id, q]) => s + (products.find(p => p.id === id)?.price || 0) * q, 0);
+  $('cart-count').textContent = count;
+  $('cart-bar').hidden = !count; document.body.classList.toggle('has-cart-bar', count > 0);
+  $('cart-bar-summary').textContent = `${count} item${count === 1 ? '' : 's'} · ${money(subtotal)}`;
+}
 let toastTimer;
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 2600); }
 function change(id, delta) { cart[id] = Math.max(0, Math.min(50, (cart[id] || 0) + delta)); if (!cart[id]) delete cart[id]; checkoutToken = null; save(); renderCart(); }
-function renderProducts() {
-  const query = $('search').value.toLowerCase().trim();
-  const shown = products.filter(p => (category === 'All' || p.category === category) && `${p.name} ${p.description}`.toLowerCase().includes(query));
-  $('products').replaceChildren(); $('product-count').textContent = `${shown.length} fresh picks`;
-  for (const p of shown) {
+function productCard(p) {
     const card = make('article', 'product'), art = make('div', 'product-image'), cover = make('a', 'product-cover'), img = make(p.image ? 'img' : 'video');
     const detailsUrl = '/products/' + encodeURIComponent(p.id);
     cover.href = detailsUrl; cover.setAttribute('aria-label', 'View ' + p.name + ' details');
@@ -55,10 +59,54 @@ function renderProducts() {
       const comment = p.latestReview.comment;
       reviewPreview.append(make('p', '', '“' + (comment.length > 140 ? comment.slice(0, 140) + '…' : comment) + '”'), make('small', '', `${p.latestReview.name} · ${p.latestReview.rating}/5 · Unverified purchase`));
     } else reviewPreview.hidden = true;
-    bottom.append(price, button); content.append(make('div', 'product-meta', `${p.category} / ${p.unit}`), heading, reviewSummary, make('p', '', p.description.length > 160 ? p.description.slice(0, 160) + '…' : p.description), reviewPreview, detailsLink, bottom); card.append(art, content); $('products').append(card);
-  }
-  if (!shown.length) $('products').append(make('p', 'empty', 'No products found. Try another category or search.'));
+    bottom.append(price, button); content.append(make('div', 'product-meta', `${p.category} / ${p.unit}`), heading, reviewSummary, make('p', '', p.description.length > 160 ? p.description.slice(0, 160) + '…' : p.description), reviewPreview, detailsLink, bottom); card.append(art, content); return card;
 }
+const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)');
+let galleryPos = 0, loopWidth = 0, holdUntil = 0, hovering = false, lastFrame = 0;
+function renderProducts() {
+  const query = $('search').value.toLowerCase().trim();
+  const shown = products.filter(p => (category === 'All' || p.category === category) && `${p.name} ${p.description}`.toLowerCase().includes(query));
+  const track = $('products'), viewport = $('gallery-viewport');
+  track.replaceChildren(); $('product-count').textContent = `${shown.length} fresh picks`;
+  for (const p of shown) track.append(productCard(p));
+  if (!shown.length) track.append(make('p', 'empty', 'No products found. Try another category or search.'));
+  galleryPos = 0; loopWidth = 0; viewport.scrollLeft = 0;
+  const overflowing = track.scrollWidth > viewport.clientWidth + 1;
+  $('gallery').classList.toggle('scrollable', overflowing);
+  if (overflowing && !reducedMotion.matches) {
+    // A second, hidden-from-assistive-tech copy lets the gallery loop without a visible jump.
+    for (const p of shown) { const copy = productCard(p); copy.setAttribute('aria-hidden', 'true'); for (const el of copy.querySelectorAll('a,button,video')) el.tabIndex = -1; track.append(copy); }
+    loopWidth = track.children[shown.length].offsetLeft - track.children[0].offsetLeft;
+  }
+}
+function galleryHeld() { return hovering || Date.now() < holdUntil || document.hidden || $('cart-dialog').open || $('gallery-viewport').matches(':focus-within') || [...document.querySelectorAll('.product-player')].some(v => !v.paused); }
+function galleryFrame(time) {
+  const dt = lastFrame ? Math.min(time - lastFrame, 50) : 0; lastFrame = time;
+  if (loopWidth && !galleryHeld()) { galleryPos = (galleryPos + dt * 0.04) % loopWidth; $('gallery-viewport').scrollLeft = galleryPos; }
+  requestAnimationFrame(galleryFrame);
+}
+function galleryStep(direction) {
+  const viewport = $('gallery-viewport'), card = $('products').querySelector('.product');
+  if (!card) return;
+  holdUntil = Date.now() + 5000;
+  if (loopWidth && direction < 0 && viewport.scrollLeft < card.offsetWidth) { galleryPos = viewport.scrollLeft + loopWidth; viewport.scrollLeft = galleryPos; }
+  viewport.scrollBy({ left: direction * (card.offsetWidth + 22), behavior: reducedMotion.matches ? 'auto' : 'smooth' });
+}
+$('gallery-viewport').onscroll = () => {
+  const viewport = $('gallery-viewport');
+  if (Math.abs(viewport.scrollLeft - galleryPos) > 2) galleryPos = viewport.scrollLeft;
+  if (loopWidth && galleryPos >= loopWidth) { galleryPos -= loopWidth; viewport.scrollLeft = galleryPos; }
+};
+$('gallery-viewport').onpointerenter = e => { if (e.pointerType === 'mouse') hovering = true; };
+$('gallery-viewport').onpointerleave = () => { hovering = false; };
+$('gallery-viewport').addEventListener('touchstart', () => { holdUntil = Date.now() + 60000; }, { passive: true });
+$('gallery-viewport').addEventListener('touchend', () => { holdUntil = Date.now() + 4000; }, { passive: true });
+$('gallery-prev').onclick = () => galleryStep(-1);
+$('gallery-next').onclick = () => galleryStep(1);
+let resizeTimer, lastWidth = innerWidth;
+addEventListener('resize', () => { if (innerWidth === lastWidth) return; lastWidth = innerWidth; clearTimeout(resizeTimer); resizeTimer = setTimeout(() => products.length && renderProducts(), 200); });
+reducedMotion.addEventListener('change', () => products.length && renderProducts());
+requestAnimationFrame(galleryFrame);
 function renderCart() {
   $('cart-items').replaceChildren(); let subtotal = 0;
   for (const [id, quantity] of Object.entries(cart)) {
@@ -77,11 +125,13 @@ function renderCart() {
   $('pay-button').disabled = busy || !config.paymentEnabled;
   $('whatsapp-button').disabled = busy || !config.whatsappEnabled;
   $('check-payment').hidden = !pending;
+  $('invoice-link').hidden = !lastInvoice; if (lastInvoice) $('invoice-link').href = lastInvoice;
   $('checkout-help').textContent = [config.paymentEnabled ? 'Online payments are processed by Razorpay.' : 'Online payment is not available yet.', config.whatsappEnabled ? 'WhatsApp orders need confirmation from the store.' : 'WhatsApp ordering is not available yet.'].join(' ');
 }
 function status(text, error = false) { $('checkout-status').textContent = text; $('checkout-status').classList.toggle('error', error); }
 function keepPending(value) { pending = value; try { if (value) localStorage.setItem('hp-pending', JSON.stringify(value)); else localStorage.removeItem('hp-pending'); } catch {} $('check-payment').hidden = !value; if (!value) resumeButton.hidden = true; }
-function paid(id) { const purchased = pending?.items || []; for (const item of purchased) { cart[item.id] = Math.max(0, (cart[item.id] || 0) - item.quantity); if (!cart[item.id]) delete cart[item.id]; } keepPending(null); checkoutToken = null; save(); renderCart(); status(`Payment confirmed. Thank you!\nYour order reference: ${id}`); }
+function rememberInvoice(id, token) { lastInvoice = '/invoice/' + encodeURIComponent(id) + '#' + encodeURIComponent(token); try { localStorage.setItem('hp-last-invoice', lastInvoice); } catch {} $('invoice-link').href = lastInvoice; $('invoice-link').hidden = false; }
+function paid(id) { if (pending?.token) rememberInvoice(id, pending.token); const purchased = pending?.items || []; for (const item of purchased) { cart[item.id] = Math.max(0, (cart[item.id] || 0) - item.quantity); if (!cart[item.id]) delete cart[item.id]; } keepPending(null); checkoutToken = null; save(); renderCart(); status(`Payment confirmed. Thank you! Your invoice is ready below.\nYour order reference: ${id}`); }
 let razorpayLoader;
 const resumeButton = make('button', 'button secondary', 'Resume this payment');
 resumeButton.hidden = true;
@@ -112,7 +162,7 @@ $('checkout-form').onsubmit = async event => {
     const items = Object.entries(cart).map(([id, quantity]) => ({ id, quantity }));
     checkoutToken ||= crypto.randomUUID();
     const order = await api('/api/orders', { items, customer, method, token: checkoutToken });
-    if (method === 'whatsapp') { $('whatsapp-link').href = order.whatsappUrl; $('whatsapp-link').hidden = false; status(`Your order summary is ready (${money(order.amount)}). Tap below to send it to the store. It has not been paid online.`); }
+    if (method === 'whatsapp') { $('whatsapp-link').href = order.whatsappUrl; $('whatsapp-link').hidden = false; rememberInvoice(order.id, checkoutToken); status(`Your order summary is ready (${money(order.amount)}). Tap below to send it to the store. It has not been paid online.`); }
     else {
       keepPending({ id: order.id, token: checkoutToken, items, order, customer: { name: customer.name, phone: customer.phone } });
       await openPayment(order, customer);
@@ -125,6 +175,7 @@ $('check-payment').onclick = async () => {
   try { const result = await api('/api/payments/status', pending); if (result.state === 'paid') paid(result.id); else { status('No captured payment yet. Resume this same order below. If money was debited, wait and check again or contact the store with order ' + pending.id + '.'); resumeButton.hidden = !pending.order; } } catch (e) { status(e.message, true); } finally { $('check-payment').disabled = false; }
 };
 $('open-cart').onclick = () => { if (!config) return; renderCart(); $('cart-dialog').showModal(); };
+$('go-to-cart').onclick = () => $('open-cart').click();
 $('close-cart').onclick = () => $('cart-dialog').close();
 $('cart-dialog').onclick = event => { if (event.target === $('cart-dialog')) { const r = event.target.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) event.target.close(); } };
 $('search').oninput = renderProducts;
@@ -133,8 +184,9 @@ async function init() {
     [config, products] = await Promise.all([api('/api/config'), api('/api/products')]);
     for (const id of Object.keys(cart)) if (!products.some(p => p.id === id && p.available)) delete cart[id];
     $('demo-note').hidden = !config.demo; $('delivery-banner').textContent = config.deliveryFee === 0 ? 'Free delivery on every order' : `Free delivery from ${money(config.freeAbove)}`;
-    for (const name of ['All', ...new Set(products.map(p => p.category))]) { const button = make('button', '', name); button.setAttribute('aria-pressed', name === category); button.onclick = () => { category = name; for (const sibling of $('categories').children) sibling.setAttribute('aria-pressed', sibling === button); renderProducts(); }; $('categories').append(button); }
+    for (const name of ['All', ...new Set(products.map(p => p.category))]) { const button = make('button', '', name); button.setAttribute('aria-pressed', name === category); button.onclick = () => { category = name; for (const sibling of $('categories').children) sibling.setAttribute('aria-pressed', sibling === button); renderProducts(); $('shop').scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth' }); }; $('categories').append(button); }
     $('load-status').hidden = true; save(); renderProducts(); renderCart(); if (pending) toast('You have a pending payment. Open your basket to check it.');
+    if (new URLSearchParams(location.search).get('cart') === 'open') { history.replaceState(null, '', '/'); $('open-cart').click(); }
   } catch (e) { $('load-status').textContent = `${e.message} Please refresh to try again.`; }
 }
 init();

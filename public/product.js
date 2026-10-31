@@ -6,6 +6,13 @@ async function api(url, data) {
   const res = await fetch(url, data ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : {});
   const result = await res.json(); if (!res.ok) throw new Error(result.error || 'Unable to load data.'); return result;
 }
+function cartBar() {
+  let saved = {}; try { saved = JSON.parse(localStorage.getItem('hp-cart') || '{}') || {}; } catch {}
+  const count = Object.values(saved).filter(q => Number.isInteger(q) && q > 0).reduce((s, q) => s + q, 0);
+  $('cart-bar').hidden = !count; document.body.classList.toggle('has-cart-bar', count > 0);
+  $('cart-bar-summary').textContent = `${count} item${count === 1 ? '' : 's'} in your basket`;
+}
+cartBar();
 function reviews(data) {
   $('rating-summary').textContent = data.count ? `★ ${data.average.toFixed(1)} / 5 · ${data.count} review${data.count === 1 ? '' : 's'}` : 'No reviews yet';
   $('review-list').replaceChildren();
@@ -39,7 +46,8 @@ async function init() {
         if (!saved || typeof saved !== 'object' || Array.isArray(saved)) saved = {};
         const quantity = Number.isInteger(saved[id]) && saved[id] > 0 ? saved[id] : 0;
         saved[id] = Math.min(50, quantity + 1); localStorage.setItem('hp-cart', JSON.stringify(saved));
-        $('cart-status').textContent = quantity >= 50 ? 'Maximum 50 units per product.' : 'Added to your basket. Return to the store to checkout.';
+        $('cart-status').textContent = quantity >= 50 ? 'Maximum 50 units per product.' : 'Added to your basket.';
+        cartBar();
       } catch { $('cart-status').textContent = 'Your browser could not save the basket. Please enable site storage.'; }
     };
     $('detail').hidden = false; $('page-status').hidden = true;

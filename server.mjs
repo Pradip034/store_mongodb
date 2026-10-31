@@ -217,6 +217,12 @@ export async function createApp(env = process.env) {
           await db.collection('orders').updateOne({ id: orderId }, { $set: { fulfillment: input.status, fulfillmentUpdated: Date.now() } });
           return send(res, 200, { ok: true, status: input.status });
         }
+        const invoiceOrderId = route.match(/^\/api\/admin\/orders\/([a-zA-Z0-9-]+)\/invoice$/)?.[1];
+        if (invoiceOrderId && req.method === 'GET') {
+          const row = await db.collection('orders').findOne({ id: invoiceOrderId });
+          if (!row) fail(404, 'Order not found.');
+          return send(res, 200, invoice(row));
+        }
         if (route === '/api/admin/orders' && req.method === 'GET') return send(res, 200, (await db.collection('orders').find().sort({ created: -1 }).limit(200).toArray()).map(row => ({ ...row.body, id: row.id, state: row.state, fulfillment: row.fulfillment || 'in_process', created: row.created })));
       }
       if (route === '/api/orders' && req.method === 'POST') {
@@ -273,6 +279,18 @@ export async function createApp(env = process.env) {
         }
         return send(res, 200, { id: row.id, state: row.state });
       }
+      function invoice(row) {
+        if (['creating', 'failed'].includes(row.state)) fail(409, 'This order was not completed, so no invoice is available.');
+        const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(row.created).replaceAll('-', '');
+        return { ...row.body, id: row.id, number: `HP-${date}-${row.id.slice(0, 8).toUpperCase()}`, state: row.state, fulfillment: row.fulfillment || 'in_process', created: row.created, store: { name: 'Let Us Be Your Health Partner', phone: whatsapp ? `+${whatsapp}` : '', website: origin } };
+      }
+      if (route === '/api/invoices' && req.method === 'POST') {
+        rate(req, 'invoices', 30);
+        const input = await json(req);
+        const row = await db.collection('orders').findOne({ id: String(input.id), token: String(input.token) });
+        if (!row) fail(404, 'Invoice not found.');
+        return send(res, 200, invoice(row));
+      }
       if (route === '/api/payments/webhook' && req.method === 'POST') {
         const raw = await body(req);
         if (!verifySignature(raw, req.headers['x-razorpay-signature'], env.RAZORPAY_WEBHOOK_SECRET)) fail(400, 'Invalid webhook signature.');
@@ -288,7 +306,8 @@ export async function createApp(env = process.env) {
       }
       if (route.startsWith('/api/')) fail(404, 'API endpoint not found.');
       if (!['GET', 'HEAD'].includes(req.method)) fail(405, 'Method not allowed.');
-      const files = { '/': 'index.html', '/admin': 'admin.html', '/admin/orders': 'admin.html', '/style.css': 'style.css', '/app.js': 'app.js', '/admin.js': 'admin.js', '/product.js': 'product.js' };
+      const files = { '/': 'index.html', '/admin': 'admin.html', '/admin/orders': 'admin.html', '/style.css': 'style.css', '/app.js': 'app.js', '/admin.js': 'admin.js', '/product.js': 'product.js', '/invoice.js': 'invoice.js' };
+      if (/^\/invoice\/[a-zA-Z0-9-]+$/.test(route)) files[route] = 'invoice.html';
       if (/^\/products\/[a-zA-Z0-9-]+$/.test(route)) { if (!(await products()).some(p => p.id === route.split('/')[2])) fail(404, 'Product not found.'); files[route] = 'product.html'; }
       let filename = files[route] ? path.join(root, 'public', files[route]) : null;
       if (/^\/images\/[a-zA-Z0-9_-]+\.(jpg|jpeg|png|webp)$/.test(route)) filename = path.join(root, 'public', route);
