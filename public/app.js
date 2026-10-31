@@ -11,9 +11,10 @@ function save() {
   try { localStorage.setItem('hp-cart', JSON.stringify(cart)); } catch {}
   const count = Object.values(cart).reduce((s, q) => s + q, 0);
   const subtotal = Object.entries(cart).reduce((s, [id, q]) => s + (products.find(p => p.id === id)?.price || 0) * q, 0);
-  $('cart-count').textContent = count;
-  $('cart-bar').hidden = !count; document.body.classList.toggle('has-cart-bar', count > 0);
-  $('cart-bar-summary').textContent = `${count} item${count === 1 ? '' : 's'} · ${money(subtotal)}`;
+  // The bar is the only way into the basket, so keep it while a payment is still pending too.
+  const show = count > 0 || Boolean(pending);
+  $('cart-bar').hidden = !show; document.body.classList.toggle('has-cart-bar', show);
+  $('cart-bar-summary').textContent = count ? `${count} item${count === 1 ? '' : 's'} · ${money(subtotal)}` : 'Payment pending';
 }
 let toastTimer;
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 2600); }
@@ -67,7 +68,7 @@ function renderProducts() {
   const query = $('search').value.toLowerCase().trim();
   const shown = products.filter(p => (category === 'All' || p.category === category) && `${p.name} ${p.description}`.toLowerCase().includes(query));
   const track = $('products'), viewport = $('gallery-viewport');
-  track.replaceChildren(); $('product-count').textContent = `${shown.length} fresh picks`;
+  track.replaceChildren();
   for (const p of shown) track.append(productCard(p));
   if (!shown.length) track.append(make('p', 'empty', 'No products found. Try another category or search.'));
   galleryPos = 0; loopWidth = 0; viewport.scrollLeft = 0;
@@ -172,8 +173,8 @@ $('check-payment').onclick = async () => {
   if (!pending) return; $('check-payment').disabled = true; status('Checking payment…');
   try { const result = await api('/api/payments/status', pending); if (result.state === 'paid') paid(result.id); else { status('No captured payment yet. Resume this same order below. If money was debited, wait and check again or contact the store with order ' + pending.id + '.'); resumeButton.hidden = !pending.order; } } catch (e) { status(e.message, true); } finally { $('check-payment').disabled = false; }
 };
-$('open-cart').onclick = () => { if (!config) return; renderCart(); $('cart-dialog').showModal(); };
-$('go-to-cart').onclick = () => $('open-cart').click();
+function openCart() { if (!config) return; renderCart(); $('cart-dialog').showModal(); }
+$('go-to-cart').onclick = openCart;
 $('close-cart').onclick = () => $('cart-dialog').close();
 $('cart-dialog').onclick = event => { if (event.target === $('cart-dialog')) { const r = event.target.getBoundingClientRect(); if (event.clientX < r.left || event.clientX > r.right || event.clientY < r.top || event.clientY > r.bottom) event.target.close(); } };
 $('search').oninput = renderProducts;
@@ -187,7 +188,7 @@ async function init() {
     const params = new URLSearchParams(location.search), added = products.find(p => p.id === params.get('added'));
     if (params.has('cart') || params.has('added')) history.replaceState(null, '', '/' + location.hash);
     if (added) toast(`${added.name} added to your basket. Keep shopping or go to cart.`);
-    if (params.get('cart') === 'open') $('open-cart').click();
+    if (params.get('cart') === 'open') openCart();
   } catch (e) { $('load-status').textContent = `${e.message} Please refresh to try again.`; }
 }
 init();

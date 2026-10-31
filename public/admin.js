@@ -27,6 +27,7 @@ async function loadProducts() {
 let orders = [], orderTab = 'in_process';
 const statusNames = { in_process: 'In Process', delivered: 'Delivered', rejected: 'Rejected' };
 const paymentNames = { paid: 'Paid online', awaiting_payment: 'Online payment pending', whatsapp_pending: 'WhatsApp order (payment as arranged with the store)' };
+const paymentShort = { paid: 'Paid', awaiting_payment: 'Awaiting payment', whatsapp_pending: 'WhatsApp', creating: 'Incomplete', failed: 'Failed' };
 // Customers type phone numbers freely; WhatsApp needs digits with the country code (India by default).
 function whatsappNumber(phone) {
   const digits = phone.replace(/\D/g, '');
@@ -36,7 +37,7 @@ function whatsappNumber(phone) {
 }
 function invoiceMessage(o) {
   return [`Hello ${o.customer.name}, thank you for shopping with Let Us Be Your Health Partner!`, 'Your order has been delivered. Here is your invoice.', '',
-    `*Invoice ${o.number}*`, `Date: ${new Date(o.created).toLocaleDateString('en-IN')}`, `Order: ${o.id}`, '',
+    `*Invoice ${o.number}*`, 'Issued by: Aranya Global, Kolkata - 700079', `Date: ${new Date(o.created).toLocaleDateString('en-IN')}`, `Order: ${o.id}`, '',
     ...o.lines.map(l => `${l.name} (${l.unit}) × ${l.quantity} = ${money(l.total)}`), '',
     `Subtotal: ${money(o.subtotal)}`, `Delivery: ${o.delivery ? money(o.delivery) : 'Free'}`, `*Total: ${money(o.total)}*`, `Payment: ${paymentNames[o.state] || o.state.replaceAll('_', ' ')}`, '',
     `Delivered to: ${o.customer.address}`, '', 'We hope to serve you again soon!'].join('\n');
@@ -51,25 +52,39 @@ function renderOrders() {
   }
   $('orders').setAttribute('aria-labelledby', 'tab-' + orderTab);
   const shown = orders.filter(o => o.fulfillment === orderTab);
-  if (!shown.length) $('orders').append(el('p', 'empty', `No ${statusNames[orderTab].toLowerCase()} orders.`));
-  for (const o of shown) { const card = el('article', 'order-card'); card.append(el('h3', '', `${o.customer.name} · ${money(o.total)}`), el('span', `order-status ${o.state}`, o.state.replaceAll('_', ' ')), el('p', 'help', `${new Date(o.created).toLocaleString('en-IN')} · ${o.id}`), el('p', '', o.lines.map(l => `${l.name} (${l.unit}) × ${l.quantity} — ${money(l.total)}`).join('\n')), el('p', '', `Delivery: ${money(o.delivery)}`), el('p', '', `${o.customer.phone}\n${o.customer.address}`));
-    const invoiceLink = el('a', 'invoice-admin-link', 'View invoice'); invoiceLink.href = '/invoice/' + encodeURIComponent(o.id); invoiceLink.target = '_blank'; invoiceLink.rel = 'noopener';
-    if (!['creating', 'failed'].includes(o.state)) card.append(invoiceLink);
-    if (o.fulfillment === 'delivered' && !['creating', 'failed'].includes(o.state)) {
-      const number = whatsappNumber(o.customer.phone);
-      if (number) { const send = el('a', 'button whatsapp-invoice', 'Send invoice on WhatsApp'); send.href = `https://wa.me/${number}?text=${encodeURIComponent(invoiceMessage(o))}`; send.target = '_blank'; send.rel = 'noopener noreferrer'; card.append(send); }
-      else card.append(el('p', 'help', 'The customer’s phone number cannot be used for WhatsApp. Send the invoice manually.'));
-    }
-    const label = el('label', 'fulfillment-control', 'Order status'), select = el('select');
-    for (const [value, text] of [['in_process', 'In Process'], ['delivered', 'Delivered'], ['rejected', 'Rejected']]) { const option = el('option', '', text); option.value = value; select.append(option); }
+  if (!shown.length) { $('orders').append(el('p', 'empty', `No ${statusNames[orderTab].toLowerCase()} orders.`)); return; }
+  const sheet = el('div', 'orders-sheet'), table = el('table', 'orders-table'), thead = el('thead'), head = el('tr'), tbody = el('tbody');
+  for (const title of ['#', 'Date', 'Invoice no.', 'Customer', 'Phone', 'Items', 'Total', 'Payment', 'Status', 'Invoice']) { const th = el('th', title === 'Total' ? 'num' : '', title); th.scope = 'col'; head.append(th); }
+  thead.append(head);
+  shown.forEach((o, index) => {
+    const row = el('tr'), completed = !['creating', 'failed'].includes(o.state), created = new Date(o.created);
+    const when = el('td', 'nowrap'); when.append(el('strong', '', created.toLocaleDateString('en-IN', { day: '2-digit', month: 'short', year: 'numeric' })), el('small', '', created.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })));
+    const customer = el('td', 'customer-cell'); customer.title = o.customer.address; customer.append(el('strong', '', o.customer.name), el('small', '', o.customer.address));
+    const phone = el('td', 'nowrap'), call = el('a', '', o.customer.phone); call.href = 'tel:' + o.customer.phone.replace(/[^\d+]/g, ''); phone.append(call);
+    const items = el('td', 'items-cell', o.lines.map(l => `${l.name} × ${l.quantity}`).join(', '));
+    items.title = o.lines.map(l => `${l.name} (${l.unit}) × ${l.quantity} — ${money(l.total)}`).concat(`Delivery: ${o.delivery ? money(o.delivery) : 'Free'}`).join('\n');
+    const payment = el('td'); payment.append(el('span', `pill ${o.state}`, paymentShort[o.state] || o.state.replaceAll('_', ' ')));
+    const select = el('select', 'status-select'); select.setAttribute('aria-label', `Order status for ${o.customer.name}`);
+    for (const [value, text] of Object.entries(statusNames)) { const option = el('option', '', text); option.value = value; select.append(option); }
     select.value = o.fulfillment;
-    const saved = el('p', 'help'); saved.setAttribute('role', 'status');
     select.onchange = async () => {
-      select.disabled = true; saved.textContent = 'Saving…';
+      select.disabled = true; status('Saving…');
       try { await api('/api/admin/orders/' + o.id + '/status', 'PUT', { status: select.value }); o.fulfillment = select.value; renderOrders(); status(`Order for ${o.customer.name} moved to ${statusNames[o.fulfillment]}.`); }
-      catch (e) { select.value = o.fulfillment; saved.textContent = e.message; select.disabled = false; }
+      catch (e) { select.value = o.fulfillment; status(e.message, true); select.disabled = false; }
     };
-    label.append(select); card.append(label, saved); $('orders').append(card); }
+    const statusCell = el('td'); statusCell.append(select);
+    const actions = el('td', 'actions-cell');
+    if (completed) { const pdf = el('a', 'sheet-link', 'PDF'); pdf.href = `/api/admin/orders/${encodeURIComponent(o.id)}/invoice.pdf`; pdf.target = '_blank'; pdf.rel = 'noopener'; pdf.title = 'View or download the invoice PDF'; actions.append(pdf); }
+    if (completed && o.fulfillment === 'delivered') {
+      const number = whatsappNumber(o.customer.phone);
+      if (number) { const send = el('a', 'sheet-link whatsapp', 'WhatsApp'); send.href = `https://wa.me/${number}?text=${encodeURIComponent(invoiceMessage(o))}`; send.target = '_blank'; send.rel = 'noopener noreferrer'; send.title = 'Send the invoice to the customer on WhatsApp'; actions.append(send); }
+      else actions.append(el('small', '', 'Invalid phone for WhatsApp'));
+    }
+    if (!actions.children.length) actions.append(el('small', '', '—'));
+    row.append(el('td', 'muted', String(index + 1)), when, el('td', 'nowrap mono', o.number || '—'), customer, phone, items, el('td', 'num nowrap', money(o.total)), payment, statusCell, actions);
+    tbody.append(row);
+  });
+  table.append(thead, tbody); sheet.append(table); $('orders').append(sheet);
 }
 for (const tab of document.querySelectorAll('.order-tabs [role=tab]')) {
   tab.onclick = () => { orderTab = tab.dataset.status; status(''); renderOrders(); };

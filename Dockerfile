@@ -2,7 +2,7 @@ FROM node:24-bookworm-slim
 WORKDIR /app
 COPY package*.json ./
 RUN npm install --omit=dev
-COPY --chown=node:node server.mjs seed.mjs ./
+COPY --chown=node:node server.mjs seed.mjs invoice-pdf.mjs ./
 COPY --chown=node:node public ./public
 RUN mkdir -p /app/uploads && chown -R node:node /app/uploads
 USER node

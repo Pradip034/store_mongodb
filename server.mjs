@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync } from 'no
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import seed from './seed.mjs';
+import { invoicePdf } from './invoice-pdf.mjs';
 import { setServers } from 'node:dns/promises';
 
 setServers(['8.8.8.8', '1.1.1.1']);
@@ -218,11 +219,15 @@ export async function createApp(env = process.env) {
           await db.collection('orders').updateOne({ id: orderId }, { $set: { fulfillment: input.status, fulfillmentUpdated: Date.now() } });
           return send(res, 200, { ok: true, status: input.status });
         }
-        const invoiceOrderId = route.match(/^\/api\/admin\/orders\/([a-zA-Z0-9-]+)\/invoice$/)?.[1];
+        const invoiceOrderId = route.match(/^\/api\/admin\/orders\/([a-zA-Z0-9-]+)\/invoice\.pdf$/)?.[1];
         if (invoiceOrderId && req.method === 'GET') {
           const row = await db.collection('orders').findOne({ id: invoiceOrderId });
           if (!row) fail(404, 'Order not found.');
-          return send(res, 200, invoice(row));
+          const inv = invoice(row), pdf = invoicePdf(inv);
+          // The page CSP would stop some browsers' built-in PDF viewers; the PDF itself has no scripts.
+          res.removeHeader('Content-Security-Policy');
+          res.writeHead(200, { 'Content-Type': 'application/pdf', 'Content-Length': pdf.length, 'Content-Disposition': `inline; filename="Invoice-${inv.number}.pdf"`, 'Cache-Control': 'no-store' });
+          return res.end(req.method === 'HEAD' ? undefined : pdf);
         }
         if (route === '/api/admin/orders' && req.method === 'GET') return send(res, 200, (await db.collection('orders').find().sort({ created: -1 }).limit(200).toArray()).map(row => ({ ...row.body, id: row.id, number: invoiceNumber(row), state: row.state, fulfillment: row.fulfillment || 'in_process', created: row.created })));
       }
@@ -282,7 +287,7 @@ export async function createApp(env = process.env) {
       }
       function invoice(row) {
         if (['creating', 'failed'].includes(row.state)) fail(409, 'This order was not completed, so no invoice is available.');
-        return { ...row.body, id: row.id, number: invoiceNumber(row), state: row.state, fulfillment: row.fulfillment || 'in_process', created: row.created, store: { name: 'Let Us Be Your Health Partner', phone: whatsapp ? `+${whatsapp}` : '', website: origin } };
+        return { ...row.body, id: row.id, number: invoiceNumber(row), state: row.state, fulfillment: row.fulfillment || 'in_process', created: row.created, store: { name: 'Let Us Be Your Health Partner', phone: whatsapp ? `+${whatsapp}`.replace(/^\+91(\d{5})(\d{5})$/, '+91 $1 $2') : '', website: origin } };
       }
       if (route === '/api/payments/webhook' && req.method === 'POST') {
         const raw = await body(req);
@@ -299,8 +304,7 @@ export async function createApp(env = process.env) {
       }
       if (route.startsWith('/api/')) fail(404, 'API endpoint not found.');
       if (!['GET', 'HEAD'].includes(req.method)) fail(405, 'Method not allowed.');
-      const files = { '/': 'index.html', '/admin': 'admin.html', '/admin/orders': 'admin.html', '/style.css': 'style.css', '/app.js': 'app.js', '/admin.js': 'admin.js', '/product.js': 'product.js', '/invoice.js': 'invoice.js' };
-      if (/^\/invoice\/[a-zA-Z0-9-]+$/.test(route)) files[route] = 'invoice.html';
+      const files = { '/': 'index.html', '/admin': 'admin.html', '/admin/orders': 'admin.html', '/style.css': 'style.css', '/app.js': 'app.js', '/admin.js': 'admin.js', '/product.js': 'product.js' };
       if (/^\/products\/[a-zA-Z0-9-]+$/.test(route)) { if (!(await products()).some(p => p.id === route.split('/')[2])) fail(404, 'Product not found.'); files[route] = 'product.html'; }
       let filename = files[route] ? path.join(root, 'public', files[route]) : null;
       if (/^\/images\/[a-zA-Z0-9_-]+\.(jpg|jpeg|png|webp)$/.test(route)) filename = path.join(root, 'public', route);
