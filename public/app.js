@@ -1,7 +1,7 @@
 const $ = id => document.getElementById(id);
 const money = n => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 2 }).format(n / 100);
 const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text !== undefined) el.textContent = text; return el; };
-let products = [], config, category = 'All', busy = false, checkoutToken = null, checkoutMethod = null;
+let products = [], config, category = 'All', busy = false, checkoutToken = null, checkoutMethod = null, placed = null;
 let cart = {};
 try { const saved = JSON.parse(localStorage.getItem('hp-cart') || '{}'); if (saved && typeof saved === 'object' && !Array.isArray(saved)) for (const [id, qty] of Object.entries(saved)) if (Number.isInteger(qty) && qty > 0 && qty <= 50) cart[id] = qty; } catch {}
 let pending; try { pending = JSON.parse(localStorage.getItem('hp-pending') || 'null'); } catch {}
@@ -18,7 +18,7 @@ function save() {
 }
 let toastTimer;
 function toast(text) { $('toast').textContent = text; $('toast').hidden = false; clearTimeout(toastTimer); toastTimer = setTimeout(() => $('toast').hidden = true, 2600); }
-function change(id, delta) { cart[id] = Math.max(0, Math.min(50, (cart[id] || 0) + delta)); if (!cart[id]) delete cart[id]; checkoutToken = null; save(); renderCart(); }
+function change(id, delta) { placed = null; cart[id] = Math.max(0, Math.min(50, (cart[id] || 0) + delta)); if (!cart[id]) delete cart[id]; checkoutToken = null; save(); renderCart(); }
 function productCard(p) {
     const card = make('article', 'product'), art = make('div', 'product-image'), cover = make('a', 'product-cover'), img = make(p.image ? 'img' : 'video');
     const detailsUrl = '/products/' + encodeURIComponent(p.id);
@@ -118,19 +118,31 @@ function renderCart() {
     const qty = make('div', 'quantity'); const minus = make('button', '', '−'), plus = make('button', '', '+'); minus.setAttribute('aria-label', `Remove one ${p.name}`); plus.setAttribute('aria-label', `Add one ${p.name}`); minus.onclick = () => change(id, -1); plus.onclick = () => change(id, 1); plus.disabled = quantity >= 50;
     qty.append(minus, make('span', '', quantity), plus); row.append(img, info, qty); $('cart-items').append(row);
   }
-  if (!subtotal) $('cart-items').append(make('p', 'empty', 'Your basket is waiting for something good.'));
+  if (!subtotal && !placed) $('cart-items').append(make('p', 'empty', 'Your basket is waiting for something good.'));
   const delivery = !subtotal || subtotal >= config.freeAbove ? 0 : config.deliveryFee;
   $('totals').replaceChildren();
   for (const [name, value] of [['Subtotal', subtotal], ['Delivery', delivery], ['Total', subtotal + delivery]]) { const line = make('div', `summary-line${name === 'Total' ? ' grand' : ''}`); line.append(make('span', '', name), make('span', '', money(value))); $('totals').append(line); }
   $('checkout-form').hidden = !subtotal;
+  $('totals').hidden = !subtotal;
+  $('order-summary').hidden = !placed || subtotal > 0;
+  if (placed && !subtotal) renderPlaced();
   $('pay-button').disabled = busy || !config.paymentEnabled;
   $('whatsapp-button').disabled = busy || !config.whatsappEnabled;
   $('check-payment').hidden = !pending;
   $('checkout-help').textContent = [config.paymentEnabled ? 'Online payments are processed by Razorpay.' : 'Online payment is not available yet.', config.whatsappEnabled ? 'WhatsApp orders need confirmation from the store.' : 'WhatsApp ordering is not available yet.'].join(' ');
 }
+// Keeps what was just ordered visible after the basket is emptied.
+const snapshot = items => items.map(({ id, quantity }) => { const p = products.find(p => p.id === id); return { name: p?.name || 'Item', quantity, total: (p?.price || 0) * quantity }; });
+function renderPlaced() {
+  const box = $('order-summary'), itemsTotal = placed.lines.reduce((s, l) => s + l.total, 0);
+  box.replaceChildren(make('p', 'eyebrow', placed.paid ? 'PAYMENT CONFIRMED' : 'ORDER PLACED'), make('h3', '', 'Thank you for your order!'));
+  for (const l of placed.lines) { const line = make('div', 'summary-line'); line.append(make('span', '', `${l.name} × ${l.quantity}`), make('span', '', money(l.total))); box.append(line); }
+  for (const [name, value, cls] of [['Delivery', Math.max(0, placed.amount - itemsTotal), ''], [placed.paid ? 'Total paid' : 'Total to pay', placed.amount, ' grand']]) { const line = make('div', 'summary-line' + cls); line.append(make('span', '', name), make('span', '', value || name !== 'Delivery' ? money(value) : 'Free')); box.append(line); }
+  box.append(make('small', 'help', `Order reference: ${placed.id}`));
+}
 function status(text, error = false) { $('checkout-status').textContent = text; $('checkout-status').classList.toggle('error', error); }
 function keepPending(value) { pending = value; try { if (value) localStorage.setItem('hp-pending', JSON.stringify(value)); else localStorage.removeItem('hp-pending'); } catch {} $('check-payment').hidden = !value; if (!value) resumeButton.hidden = true; }
-function paid(id) { const purchased = pending?.items || []; for (const item of purchased) { cart[item.id] = Math.max(0, (cart[item.id] || 0) - item.quantity); if (!cart[item.id]) delete cart[item.id]; } keepPending(null); checkoutToken = null; save(); renderCart(); status(`Payment confirmed. Thank you!\nYour order reference: ${id}`); }
+function paid(id) { placed = { id, paid: true, amount: pending?.order?.amount || 0, lines: snapshot(pending?.items || []) }; const purchased = pending?.items || []; for (const item of purchased) { cart[item.id] = Math.max(0, (cart[item.id] || 0) - item.quantity); if (!cart[item.id]) delete cart[item.id]; } keepPending(null); checkoutToken = null; save(); renderCart(); status(''); }
 let razorpayLoader;
 const resumeButton = make('button', 'button secondary', 'Resume this payment');
 resumeButton.hidden = true;
@@ -161,7 +173,7 @@ $('checkout-form').onsubmit = async event => {
     const items = Object.entries(cart).map(([id, quantity]) => ({ id, quantity }));
     checkoutToken ||= crypto.randomUUID();
     const order = await api('/api/orders', { items, customer, method, token: checkoutToken });
-    if (method === 'whatsapp') { $('whatsapp-link').href = order.whatsappUrl; $('whatsapp-link').hidden = false; cart = {}; checkoutToken = null; save(); event.target.reset(); status(`Order placed (${money(order.amount)}). Your basket has been cleared.\nTap below to send the order to the store on WhatsApp. It has not been paid online.`); }
+    if (method === 'whatsapp') { $('whatsapp-link').href = order.whatsappUrl; $('whatsapp-link').hidden = false; placed = { id: order.id, amount: order.amount, lines: snapshot(items) }; cart = {}; checkoutToken = null; save(); event.target.reset(); status('Tap below to send your order to the store on WhatsApp. It has not been paid online.'); }
     else {
       keepPending({ id: order.id, token: checkoutToken, items, order, customer: { name: customer.name, phone: customer.phone } });
       await openPayment(order, customer);
@@ -186,7 +198,8 @@ async function init() {
     for (const name of ['All', ...new Set(products.map(p => p.category))]) { const button = make('button', '', name); button.setAttribute('aria-pressed', name === category); button.onclick = () => { category = name; for (const sibling of $('categories').children) sibling.setAttribute('aria-pressed', sibling === button); renderProducts(); $('shop').scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth' }); }; $('categories').append(button); }
     $('load-status').hidden = true; save(); renderProducts(); renderCart(); if (pending) toast('You have a pending payment. Open your basket to check it.');
     const params = new URLSearchParams(location.search), added = products.find(p => p.id === params.get('added'));
-    if (params.has('cart') || params.has('added')) history.replaceState(null, '', '/' + location.hash);
+    if (params.has('cart') || params.has('added') || params.has('reviewed')) history.replaceState(null, '', '/' + location.hash);
+    if (params.has('reviewed')) toast('Thank you! Your review has been published.');
     if (added) toast(`${added.name} added to your basket. Keep shopping or go to cart.`);
     if (params.get('cart') === 'open') openCart();
   } catch (e) { $('load-status').textContent = `${e.message} Please refresh to try again.`; }

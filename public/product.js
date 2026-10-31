@@ -25,7 +25,7 @@ function reviews(data) {
 }
 $('review-form').onsubmit = async e => {
   e.preventDefault(); $('submit-review').disabled = true; $('review-status').textContent = 'Submitting…';
-  try { const data = Object.fromEntries(new FormData(e.target)); data.rating = Number(data.rating); reviews(await api(endpoint, data)); e.target.reset(); $('review-status').textContent = 'Thank you! Your review has been published.'; }
+  try { const data = Object.fromEntries(new FormData(e.target)); data.rating = Number(data.rating); await api(endpoint, data); $('review-status').textContent = 'Thank you! Your review has been published. Taking you back to the store…'; location.assign('/?reviewed=' + encodeURIComponent(id) + '#shop'); return; }
   catch (err) { $('review-status').textContent = err.message; }
   finally { $('submit-review').disabled = false; }
 };
@@ -52,6 +52,7 @@ async function init() {
     };
     $('detail').hidden = false; $('page-status').hidden = true;
     try { reviews(await api(endpoint)); } catch (err) { $('review-status').textContent = err.message; }
+    if (location.hash.length > 1) document.getElementById(location.hash.slice(1))?.scrollIntoView();
   } catch (err) { $('page-status').textContent = err.message; }
 }
 init();

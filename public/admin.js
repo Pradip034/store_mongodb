@@ -13,18 +13,35 @@ async function api(url, method = 'GET', data) {
 function signedIn(on) { $('admin-links').hidden = !on; $('logout').hidden = !on; }
 function status(text, error = false) { $('admin-status').textContent = text; $('admin-status').classList.toggle('error', error); }
 function reset() { currentVideo = ''; if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl); videoPreviewUrl = ''; $('video-preview').pause(); $('video-preview').removeAttribute('src'); $('video-preview').hidden = true; form.reset(); form.elements.id.value = ''; currentImage = ''; if (previewUrl) URL.revokeObjectURL(previewUrl); previewUrl = ''; $('image-preview').hidden = true; $('editor-title').textContent = 'Add a product'; }
-async function loadProducts() {
-  products = await api('/api/products'); $('admin-products').replaceChildren();
-  if (!products.length) $('admin-products').append(el('p', 'empty', 'Add your first product using the form.'));
-  for (const p of products) {
-    const row = el('div', 'admin-product'), img = el(p.image ? 'img' : 'video'); img.src = p.image || p.video; img.alt = p.name; if (!p.image) { img.muted = true; img.preload = 'metadata'; }
-    const info = el('div'); info.append(el('strong', '', p.name), el('small', '', `${money(p.price)} / ${p.unit} · ${p.available ? 'Available' : 'Unavailable'}`));
-    const actions = el('div', 'admin-actions'), edit = el('button', '', 'Edit'), remove = el('button', 'danger', 'Delete');
-    edit.onclick = () => { reset(); for (const key of ['id', 'name', 'description', 'category', 'unit']) form.elements[key].value = p[key]; form.elements.price.value = (p.price / 100).toFixed(2); form.elements.mrp.value = (p.mrp / 100).toFixed(2); form.elements.available.checked = p.available; currentVideo = p.video || ''; $('video-preview').src = currentVideo; $('video-preview').hidden = !currentVideo; currentImage = p.image; $('image-preview').src = p.image; $('image-preview').hidden = !p.image; $('editor-title').textContent = 'Edit product'; form.scrollIntoView({ behavior: 'smooth', block: 'start' }); form.elements.name.focus({ preventScroll: true }); };
+async function loadProducts() { products = await api('/api/products'); renderProducts(); }
+function renderProducts() {
+  const query = $('product-search').value.trim().toLowerCase();
+  const shown = products.filter(p => `${p.name} ${p.category} ${p.unit} ${p.description}`.toLowerCase().includes(query));
+  $('admin-products').replaceChildren();
+  if (!shown.length) { $('admin-products').append(el('p', 'empty', products.length ? 'No products match your search.' : 'No products yet. Use “Add product” to create your first one.')); return; }
+  const sheet = el('div', 'orders-sheet'), table = el('table', 'orders-table products-table'), thead = el('thead'), head = el('tr'), tbody = el('tbody');
+  const titles = ['#', 'Photo', 'Product', 'Category', 'Pack', 'Price', 'MRP', 'Discount', 'Reviews', 'Status', 'Actions'];
+  for (const title of titles) { const th = el('th', ['Price', 'MRP'].includes(title) ? 'num' : '', title); th.scope = 'col'; head.append(th); }
+  thead.append(head);
+  shown.forEach((p, index) => {
+    const row = el('tr'), photo = el('td'), img = el(p.image ? 'img' : 'video', 'thumb'); img.src = p.image || p.video; img.alt = p.name; if (!p.image) { img.muted = true; img.preload = 'metadata'; } photo.append(img);
+    const name = el('td', 'customer-cell'); name.title = p.description; name.append(el('strong', '', p.name), el('small', '', p.description));
+    const discount = p.mrp > p.price ? `${Math.round((1 - p.price / p.mrp) * 100)}% off` : '—';
+    const reviews = el('td', 'nowrap', p.reviewCount ? `★ ${Number(p.averageRating).toFixed(1)} (${p.reviewCount})` : '—');
+    const state = el('td'); state.append(el('span', `pill ${p.available ? 'on' : 'off'}`, p.available ? 'Available' : 'Unavailable'));
+    const actions = el('td', 'actions-cell'), box = el('div', 'cell-actions'), edit = el('button', 'sheet-link', 'Edit'), remove = el('button', 'sheet-link danger', 'Delete');
+    edit.onclick = () => { reset(); for (const key of ['id', 'name', 'description', 'category', 'unit']) form.elements[key].value = p[key]; form.elements.price.value = (p.price / 100).toFixed(2); form.elements.mrp.value = (p.mrp / 100).toFixed(2); form.elements.available.checked = p.available; currentVideo = p.video || ''; $('video-preview').src = currentVideo; $('video-preview').hidden = !currentVideo; currentImage = p.image; $('image-preview').src = p.image; $('image-preview').hidden = !p.image; $('editor-title').textContent = 'Edit product'; $('product-dialog').showModal(); form.elements.name.focus(); };
     remove.onclick = async () => { if (!confirm(`Delete ${p.name}? Existing order records will be retained.`)) return; remove.disabled = true; try { await api(`/api/admin/products/${p.id}`, 'DELETE'); if (form.elements.id.value === p.id) reset(); await loadProducts(); status('Product deleted.'); } catch (e) { status(e.message, true); remove.disabled = false; } };
-    actions.append(edit, remove); row.append(img, info, actions); $('admin-products').append(row);
-  }
+    box.append(edit, remove); actions.append(box);
+    row.append(el('td', 'muted', String(index + 1)), photo, name, el('td', 'nowrap', p.category), el('td', 'nowrap', p.unit), el('td', 'num nowrap', money(p.price)), el('td', 'num nowrap muted', money(p.mrp)), el('td', 'nowrap', discount), reviews, state, actions);
+    [...row.children].forEach((td, i) => td.dataset.label = titles[i]);
+    tbody.append(row);
+  });
+  table.append(thead, tbody); sheet.append(table); $('admin-products').append(sheet);
 }
+$('product-search').oninput = renderProducts;
+$('add-product').onclick = () => { reset(); $('product-dialog').showModal(); form.elements.name.focus(); };
+$('close-product').onclick = () => $('product-dialog').close();
 let orders = [], orderTab = 'in_process';
 const statusNames = { in_process: 'In Process', delivered: 'Delivered', rejected: 'Rejected' };
 const paymentNames = { paid: 'Paid online', awaiting_payment: 'Online payment pending', whatsapp_pending: 'WhatsApp order (payment as arranged with the store)' };
@@ -41,7 +58,9 @@ function invoiceMessage(o) {
     '*Invoice Details*', ...(o.number ? [`Invoice no.: ${o.number}`] : []), 'Issued by: Aranya Global, Kolkata - 700079', `Date: ${new Date(o.created).toLocaleDateString('en-IN')}`, `Order: ${o.id}`, '',
     ...o.lines.map(l => `${l.name} (${l.unit}) × ${l.quantity} = ${money(l.total)}`), '',
     `Subtotal: ${money(o.subtotal)}`, `Delivery: ${o.delivery ? money(o.delivery) : 'Free'}`, `*Total: ${money(o.total)}*`, `Payment: ${paymentNames[o.state] || o.state.replaceAll('_', ' ')}`, '',
-    `Delivered to: ${o.customer.address}`, '', 'We hope to serve you again soon!'].join('\n');
+    `Delivered to: ${o.customer.address}`, '',
+    '⭐ *How did you like it?* Please review your products:', ...o.lines.map(l => `• ${l.name}: ${location.origin}/products/${encodeURIComponent(l.id)}#review-form`), '',
+    'We hope to serve you again soon!'].join('\n');
 }
 const invoiceUrl = o => `/api/admin/orders/${encodeURIComponent(o.id)}/invoice.pdf`;
 const invoiceName = o => `Invoice-${o.number || o.id}.pdf`;
@@ -88,16 +107,19 @@ async function loadOrders() {
 }
 function renderOrders() {
   $('orders').replaceChildren();
+  const query = $('order-search').value.trim().toLowerCase();
+  const matching = orders.filter(o => !query || [o.customer.name, o.customer.phone, o.customer.address, o.number, o.id, ...o.lines.map(l => l.name)].join(' ').toLowerCase().includes(query));
   for (const tab of document.querySelectorAll('.order-tabs [role=tab]')) {
     const selected = tab.dataset.status === orderTab;
     tab.setAttribute('aria-selected', selected); tab.tabIndex = selected ? 0 : -1;
-    tab.querySelector('span').textContent = orders.filter(o => o.fulfillment === tab.dataset.status).length;
+    tab.querySelector('span').textContent = matching.filter(o => o.fulfillment === tab.dataset.status).length;
   }
   $('orders').setAttribute('aria-labelledby', 'tab-' + orderTab);
-  const shown = orders.filter(o => o.fulfillment === orderTab);
-  if (!shown.length) { $('orders').append(el('p', 'empty', `No ${statusNames[orderTab].toLowerCase()} orders.`)); return; }
+  const shown = matching.filter(o => o.fulfillment === orderTab);
+  if (!shown.length) { $('orders').append(el('p', 'empty', query ? 'No orders match your search.' : `No ${statusNames[orderTab].toLowerCase()} orders.`)); return; }
   const sheet = el('div', 'orders-sheet'), table = el('table', 'orders-table'), thead = el('thead'), head = el('tr'), tbody = el('tbody');
-  for (const title of ['#', 'Date', 'Invoice no.', 'Customer', 'Phone', 'Items', 'Total', 'Payment', 'Status', 'Invoice']) { const th = el('th', title === 'Total' ? 'num' : '', title); th.scope = 'col'; head.append(th); }
+  const titles = ['#', 'Date', 'Invoice no.', 'Customer', 'Phone', 'Items', 'Total', 'Payment', 'Status', 'Invoice'];
+  for (const title of titles) { const th = el('th', title === 'Total' ? 'num' : '', title); th.scope = 'col'; head.append(th); }
   thead.append(head);
   shown.forEach((o, index) => {
     const row = el('tr'), completed = !['creating', 'failed'].includes(o.state), created = new Date(o.created);
@@ -124,10 +146,13 @@ function renderOrders() {
     }
     if (!actions.children.length) actions.append(el('small', '', '—'));
     row.append(el('td', 'muted', String(index + 1)), when, el('td', 'nowrap mono', o.number || '—'), customer, phone, items, el('td', 'num nowrap', money(o.total)), payment, statusCell, actions);
+    const inner = el('div', 'cell-actions'); inner.append(...actions.childNodes); actions.replaceChildren(inner);
+    [...row.children].forEach((td, i) => td.dataset.label = titles[i]);
     tbody.append(row);
   });
   table.append(thead, tbody); sheet.append(table); $('orders').append(sheet);
 }
+$('order-search').oninput = renderOrders;
 for (const tab of document.querySelectorAll('.order-tabs [role=tab]')) {
   tab.onclick = () => { orderTab = tab.dataset.status; status(''); renderOrders(); };
   tab.onkeydown = e => {
@@ -139,9 +164,8 @@ for (const tab of document.querySelectorAll('.order-tabs [role=tab]')) {
 const ordersPage = location.pathname === '/admin/orders';
 document.querySelector('.admin-layout').hidden = ordersPage;
 document.querySelector('.admin-orders').hidden = !ordersPage;
-document.querySelector('.admin-top').hidden = ordersPage;
 for (const link of document.querySelectorAll('#admin-links a')) if (link.pathname === location.pathname) link.setAttribute('aria-current', 'page');
-if (ordersPage) { document.querySelector('.admin-top h1').textContent = 'Manage your orders.'; document.title = 'Orders | Store Admin'; }
+if (ordersPage) document.title = 'Orders | Store Admin';
 async function dashboard() { $('login-section').hidden = true; $('dashboard').hidden = false; signedIn(true); if (ordersPage) await loadOrders(); else await loadProducts(); }
 $('login-form').onsubmit = async e => { e.preventDefault(); $('login-button').disabled = true; $('login-status').textContent = ''; try { await api('/api/admin/login', 'POST', Object.fromEntries(new FormData(e.target))); e.target.reset(); await dashboard(); } catch (err) { $('login-status').textContent = err.message; } finally { $('login-button').disabled = false; } };
 $('logout').onclick = async () => { try { await api('/api/admin/logout', 'POST'); $('dashboard').hidden = true; $('login-section').hidden = false; signedIn(false); $('orders').replaceChildren(); reset(); } catch (e) { status(e.message, true); } };
@@ -170,7 +194,7 @@ form.onsubmit = async e => {
     if (videoFile) { const response = await fetch('/api/admin/upload', { method: 'POST', headers: { 'Content-Type': videoFile.type }, body: videoFile }); const result = await response.json(); if (!response.ok) throw new Error(result.error); currentVideo = result.url; }
     if (!currentImage && !currentVideo) throw new Error('Please upload a photograph or video.');
     const id = values.id; await api(`/api/admin/products${id ? '/' + id : ''}`, id ? 'PUT' : 'POST', { name: values.name, description: values.description, category: values.category, unit: values.unit, price, mrp, available: form.elements.available.checked, image: currentImage, video: currentVideo });
-    reset(); await loadProducts(); status('Product saved. It is now updated on the storefront.');
+    reset(); $('product-dialog').close(); await loadProducts(); status('Product saved. It is now updated on the storefront.');
   } catch (e) { status(e.message, true); } finally { $('save-product').disabled = false; }
 };
 api('/api/admin/session').then(dashboard).catch(e => { if (!e.message.includes('sign in')) $('login-status').textContent = e.message; });
