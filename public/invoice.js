@@ -2,16 +2,12 @@ const $ = id => document.getElementById(id);
 const money = n => new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR' }).format(n / 100);
 const make = (tag, className, text) => { const el = document.createElement(tag); if (className) el.className = className; if (text !== undefined) el.textContent = text; return el; };
 const id = location.pathname.split('/')[2];
-// Customers open /invoice/<id>#<checkout token>; the store admin opens it without a token using their session.
-const token = decodeURIComponent(location.hash.slice(1));
 const payment = { paid: 'Paid online', awaiting_payment: 'Online payment pending', whatsapp_pending: 'To be paid on confirmation (WhatsApp order)' };
 const fulfillment = { in_process: 'In process', delivered: 'Delivered', rejected: 'Rejected' };
 async function load() {
-  const response = token
-    ? await fetch('/api/invoices', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id, token }) })
-    : await fetch('/api/admin/orders/' + encodeURIComponent(id) + '/invoice');
+  const response = await fetch('/api/admin/orders/' + encodeURIComponent(id) + '/invoice');
   const result = await response.json();
-  if (!response.ok) throw new Error(response.status === 401 ? 'Open this invoice from the link shown after your order, or sign in as store admin.' : result.error || 'Invoice could not be loaded.');
+  if (!response.ok) throw new Error(response.status === 401 ? 'Sign in to the store admin to view this invoice.' : result.error || 'Invoice could not be loaded.');
   return result;
 }
 function render(o) {

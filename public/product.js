@@ -46,8 +46,8 @@ async function init() {
         if (!saved || typeof saved !== 'object' || Array.isArray(saved)) saved = {};
         const quantity = Number.isInteger(saved[id]) && saved[id] > 0 ? saved[id] : 0;
         saved[id] = Math.min(50, quantity + 1); localStorage.setItem('hp-cart', JSON.stringify(saved));
-        $('cart-status').textContent = quantity >= 50 ? 'Maximum 50 units per product.' : 'Added to your basket.';
-        cartBar();
+        if (quantity >= 50) { $('cart-status').textContent = 'Maximum 50 units per product.'; return; }
+        location.assign('/?added=' + encodeURIComponent(id) + '#shop');
       } catch { $('cart-status').textContent = 'Your browser could not save the basket. Please enable site storage.'; }
     };
     $('detail').hidden = false; $('page-status').hidden = true;

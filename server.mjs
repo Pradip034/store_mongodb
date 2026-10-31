@@ -129,6 +129,7 @@ export async function createApp(env = process.env) {
     if (payment.order_id !== row.gateway_id || payment.amount !== order.total || payment.currency !== 'INR' || payment.status !== 'captured') fail(409, 'Payment is not captured yet. Please check again shortly.');
     if (row.state !== 'paid') await db.collection('orders').updateOne({ id: row.id }, { $set: { state: 'paid', 'body.paymentId': payment.id } });
   }
+  const invoiceNumber = row => `HP-${new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(row.created).replaceAll('-', '')}-${row.id.slice(0, 8).toUpperCase()}`;
   const send = (res, status, value) => { res.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(JSON.stringify(value)); };
   const server = http.createServer(async (req, res) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -223,7 +224,7 @@ export async function createApp(env = process.env) {
           if (!row) fail(404, 'Order not found.');
           return send(res, 200, invoice(row));
         }
-        if (route === '/api/admin/orders' && req.method === 'GET') return send(res, 200, (await db.collection('orders').find().sort({ created: -1 }).limit(200).toArray()).map(row => ({ ...row.body, id: row.id, state: row.state, fulfillment: row.fulfillment || 'in_process', created: row.created })));
+        if (route === '/api/admin/orders' && req.method === 'GET') return send(res, 200, (await db.collection('orders').find().sort({ created: -1 }).limit(200).toArray()).map(row => ({ ...row.body, id: row.id, number: invoiceNumber(row), state: row.state, fulfillment: row.fulfillment || 'in_process', created: row.created })));
       }
       if (route === '/api/orders' && req.method === 'POST') {
         rate(req, 'orders', 12);
@@ -281,15 +282,7 @@ export async function createApp(env = process.env) {
       }
       function invoice(row) {
         if (['creating', 'failed'].includes(row.state)) fail(409, 'This order was not completed, so no invoice is available.');
-        const date = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Kolkata' }).format(row.created).replaceAll('-', '');
-        return { ...row.body, id: row.id, number: `HP-${date}-${row.id.slice(0, 8).toUpperCase()}`, state: row.state, fulfillment: row.fulfillment || 'in_process', created: row.created, store: { name: 'Let Us Be Your Health Partner', phone: whatsapp ? `+${whatsapp}` : '', website: origin } };
-      }
-      if (route === '/api/invoices' && req.method === 'POST') {
-        rate(req, 'invoices', 30);
-        const input = await json(req);
-        const row = await db.collection('orders').findOne({ id: String(input.id), token: String(input.token) });
-        if (!row) fail(404, 'Invoice not found.');
-        return send(res, 200, invoice(row));
+        return { ...row.body, id: row.id, number: invoiceNumber(row), state: row.state, fulfillment: row.fulfillment || 'in_process', created: row.created, store: { name: 'Let Us Be Your Health Partner', phone: whatsapp ? `+${whatsapp}` : '', website: origin } };
       }
       if (route === '/api/payments/webhook' && req.method === 'POST') {
         const raw = await body(req);

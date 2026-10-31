@@ -26,6 +26,21 @@ async function loadProducts() {
 }
 let orders = [], orderTab = 'in_process';
 const statusNames = { in_process: 'In Process', delivered: 'Delivered', rejected: 'Rejected' };
+const paymentNames = { paid: 'Paid online', awaiting_payment: 'Online payment pending', whatsapp_pending: 'WhatsApp order (payment as arranged with the store)' };
+// Customers type phone numbers freely; WhatsApp needs digits with the country code (India by default).
+function whatsappNumber(phone) {
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length === 10) return '91' + digits;
+  if (digits.length === 11 && digits.startsWith('0')) return '91' + digits.slice(1);
+  return digits.length >= 11 && digits.length <= 15 ? digits : '';
+}
+function invoiceMessage(o) {
+  return [`Hello ${o.customer.name}, thank you for shopping with Let Us Be Your Health Partner!`, 'Your order has been delivered. Here is your invoice.', '',
+    `*Invoice ${o.number}*`, `Date: ${new Date(o.created).toLocaleDateString('en-IN')}`, `Order: ${o.id}`, '',
+    ...o.lines.map(l => `${l.name} (${l.unit}) × ${l.quantity} = ${money(l.total)}`), '',
+    `Subtotal: ${money(o.subtotal)}`, `Delivery: ${o.delivery ? money(o.delivery) : 'Free'}`, `*Total: ${money(o.total)}*`, `Payment: ${paymentNames[o.state] || o.state.replaceAll('_', ' ')}`, '',
+    `Delivered to: ${o.customer.address}`, '', 'We hope to serve you again soon!'].join('\n');
+}
 async function loadOrders() { orders = await api('/api/admin/orders'); renderOrders(); }
 function renderOrders() {
   $('orders').replaceChildren();
@@ -40,6 +55,11 @@ function renderOrders() {
   for (const o of shown) { const card = el('article', 'order-card'); card.append(el('h3', '', `${o.customer.name} · ${money(o.total)}`), el('span', `order-status ${o.state}`, o.state.replaceAll('_', ' ')), el('p', 'help', `${new Date(o.created).toLocaleString('en-IN')} · ${o.id}`), el('p', '', o.lines.map(l => `${l.name} (${l.unit}) × ${l.quantity} — ${money(l.total)}`).join('\n')), el('p', '', `Delivery: ${money(o.delivery)}`), el('p', '', `${o.customer.phone}\n${o.customer.address}`));
     const invoiceLink = el('a', 'invoice-admin-link', 'View invoice'); invoiceLink.href = '/invoice/' + encodeURIComponent(o.id); invoiceLink.target = '_blank'; invoiceLink.rel = 'noopener';
     if (!['creating', 'failed'].includes(o.state)) card.append(invoiceLink);
+    if (o.fulfillment === 'delivered' && !['creating', 'failed'].includes(o.state)) {
+      const number = whatsappNumber(o.customer.phone);
+      if (number) { const send = el('a', 'button whatsapp-invoice', 'Send invoice on WhatsApp'); send.href = `https://wa.me/${number}?text=${encodeURIComponent(invoiceMessage(o))}`; send.target = '_blank'; send.rel = 'noopener noreferrer'; card.append(send); }
+      else card.append(el('p', 'help', 'The customer’s phone number cannot be used for WhatsApp. Send the invoice manually.'));
+    }
     const label = el('label', 'fulfillment-control', 'Order status'), select = el('select');
     for (const [value, text] of [['in_process', 'In Process'], ['delivered', 'Delivered'], ['rejected', 'Rejected']]) { const option = el('option', '', text); option.value = value; select.append(option); }
     select.value = o.fulfillment;

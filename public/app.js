@@ -5,7 +5,7 @@ let products = [], config, category = 'All', busy = false, checkoutToken = null,
 let cart = {};
 try { const saved = JSON.parse(localStorage.getItem('hp-cart') || '{}'); if (saved && typeof saved === 'object' && !Array.isArray(saved)) for (const [id, qty] of Object.entries(saved)) if (Number.isInteger(qty) && qty > 0 && qty <= 50) cart[id] = qty; } catch {}
 let pending; try { pending = JSON.parse(localStorage.getItem('hp-pending') || 'null'); } catch {}
-let lastInvoice; try { lastInvoice = localStorage.getItem('hp-last-invoice'); } catch {}
+try { localStorage.removeItem('hp-last-invoice'); } catch {}
 async function api(url, data) { const response = await fetch(url, data ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : {}); const result = await response.json(); if (!response.ok) throw new Error(result.error || 'Request failed.'); return result; }
 function save() {
   try { localStorage.setItem('hp-cart', JSON.stringify(cart)); } catch {}
@@ -125,13 +125,11 @@ function renderCart() {
   $('pay-button').disabled = busy || !config.paymentEnabled;
   $('whatsapp-button').disabled = busy || !config.whatsappEnabled;
   $('check-payment').hidden = !pending;
-  $('invoice-link').hidden = !lastInvoice; if (lastInvoice) $('invoice-link').href = lastInvoice;
   $('checkout-help').textContent = [config.paymentEnabled ? 'Online payments are processed by Razorpay.' : 'Online payment is not available yet.', config.whatsappEnabled ? 'WhatsApp orders need confirmation from the store.' : 'WhatsApp ordering is not available yet.'].join(' ');
 }
 function status(text, error = false) { $('checkout-status').textContent = text; $('checkout-status').classList.toggle('error', error); }
 function keepPending(value) { pending = value; try { if (value) localStorage.setItem('hp-pending', JSON.stringify(value)); else localStorage.removeItem('hp-pending'); } catch {} $('check-payment').hidden = !value; if (!value) resumeButton.hidden = true; }
-function rememberInvoice(id, token) { lastInvoice = '/invoice/' + encodeURIComponent(id) + '#' + encodeURIComponent(token); try { localStorage.setItem('hp-last-invoice', lastInvoice); } catch {} $('invoice-link').href = lastInvoice; $('invoice-link').hidden = false; }
-function paid(id) { if (pending?.token) rememberInvoice(id, pending.token); const purchased = pending?.items || []; for (const item of purchased) { cart[item.id] = Math.max(0, (cart[item.id] || 0) - item.quantity); if (!cart[item.id]) delete cart[item.id]; } keepPending(null); checkoutToken = null; save(); renderCart(); status(`Payment confirmed. Thank you! Your invoice is ready below.\nYour order reference: ${id}`); }
+function paid(id) { const purchased = pending?.items || []; for (const item of purchased) { cart[item.id] = Math.max(0, (cart[item.id] || 0) - item.quantity); if (!cart[item.id]) delete cart[item.id]; } keepPending(null); checkoutToken = null; save(); renderCart(); status(`Payment confirmed. Thank you!\nYour order reference: ${id}`); }
 let razorpayLoader;
 const resumeButton = make('button', 'button secondary', 'Resume this payment');
 resumeButton.hidden = true;
@@ -162,7 +160,7 @@ $('checkout-form').onsubmit = async event => {
     const items = Object.entries(cart).map(([id, quantity]) => ({ id, quantity }));
     checkoutToken ||= crypto.randomUUID();
     const order = await api('/api/orders', { items, customer, method, token: checkoutToken });
-    if (method === 'whatsapp') { $('whatsapp-link').href = order.whatsappUrl; $('whatsapp-link').hidden = false; rememberInvoice(order.id, checkoutToken); status(`Your order summary is ready (${money(order.amount)}). Tap below to send it to the store. It has not been paid online.`); }
+    if (method === 'whatsapp') { $('whatsapp-link').href = order.whatsappUrl; $('whatsapp-link').hidden = false; status(`Your order summary is ready (${money(order.amount)}). Tap below to send it to the store. It has not been paid online.`); }
     else {
       keepPending({ id: order.id, token: checkoutToken, items, order, customer: { name: customer.name, phone: customer.phone } });
       await openPayment(order, customer);
@@ -186,7 +184,10 @@ async function init() {
     $('demo-note').hidden = !config.demo; $('delivery-banner').textContent = config.deliveryFee === 0 ? 'Free delivery on every order' : `Free delivery from ${money(config.freeAbove)}`;
     for (const name of ['All', ...new Set(products.map(p => p.category))]) { const button = make('button', '', name); button.setAttribute('aria-pressed', name === category); button.onclick = () => { category = name; for (const sibling of $('categories').children) sibling.setAttribute('aria-pressed', sibling === button); renderProducts(); $('shop').scrollIntoView({ behavior: reducedMotion.matches ? 'auto' : 'smooth' }); }; $('categories').append(button); }
     $('load-status').hidden = true; save(); renderProducts(); renderCart(); if (pending) toast('You have a pending payment. Open your basket to check it.');
-    if (new URLSearchParams(location.search).get('cart') === 'open') { history.replaceState(null, '', '/'); $('open-cart').click(); }
+    const params = new URLSearchParams(location.search), added = products.find(p => p.id === params.get('added'));
+    if (params.has('cart') || params.has('added')) history.replaceState(null, '', '/' + location.hash);
+    if (added) toast(`${added.name} added to your basket. Keep shopping or go to cart.`);
+    if (params.get('cart') === 'open') $('open-cart').click();
   } catch (e) { $('load-status').textContent = `${e.message} Please refresh to try again.`; }
 }
 init();
